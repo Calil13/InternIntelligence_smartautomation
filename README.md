@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Smart Email Automation (Ağıllı E-poçt Avtomatlaşdırılması)
 
 Bu layihə Spring Boot əsasında qurulmuş elektron poçt idarəetmə sisteminə ağıllı avtomatlaşdırma, məzmun analizi, açar sözlərə əsaslanan etiketləmə və NLP (Təbii Dil Emalı) əsaslı xülasə çıxarma imkanları əlavə edir.
@@ -121,3 +122,6 @@ Layihə işə salındıqdan sonra bütün API endpoint-ləri və onların test i
 ```
 http://localhost:8080/swagger-ui.html
 ```
+=======
+# InternIntelligence_gmailApplication
+>>>>>>> ff462adfd7631b383e549b24bf620d44786af0d6

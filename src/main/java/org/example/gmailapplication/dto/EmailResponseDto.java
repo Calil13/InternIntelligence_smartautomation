@@ -4,9 +4,11 @@ import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import org.example.gmailapplication.enums.EmailCategory;
 import org.example.gmailapplication.enums.EmailFolder;
 
 import java.time.LocalDateTime;
+import java.util.Set;
 
 @Data
 @Builder
@@ -22,6 +24,9 @@ public class EmailResponseDto {
     private String subject;
     private String body;
     private EmailFolder folder;
+    private EmailCategory category;
+    private Set<String> labels;
+    private String summary;
     private Boolean isRead;
     private Boolean isStarred;
     private LocalDateTime createdAt;

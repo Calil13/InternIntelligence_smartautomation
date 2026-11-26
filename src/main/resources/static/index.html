@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SmartMail AI — Gmail Automation, OAuth 2.0 & NLP</title>
+    <link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+    <!-- Auth View -->
+    <div id="authView" class="auth-shell hidden">
+        <div class="auth-card">
+            <div class="brand-pill">
+                <span class="brand-dot"></span>
+                Gmail API + OAuth 2.0 + NLP
+            </div>
+            <h1>SmartMail Automation</h1>
+            <p class="auth-subtitle">
+                Real-world intelligent email workspace with Google OAuth 2.0 authentication,
+                incremental Gmail API sync, bilingual keyword labeling, NLP extractive summarization,
+                and Caffeine performance caching.
+            </p>
+
+            <div class="feature-grid">
+                <div class="feature-item">
+                    <strong>OAuth 2.0 + Gmail API</strong>
+                    <span>Incremental <code>historyId</code> sync &amp; batch deduplication</span>
+                </div>
+                <div class="feature-item">
+                    <strong>Smart Categorization</strong>
+                    <span>Primary, Work, Promotions, Social, Updates, Spam</span>
+                </div>
+                <div class="feature-item">
+                    <strong>Keyword Labeling</strong>
+                    <span>AZ/EN rules + custom persistent DB rules</span>
+                </div>
+                <div class="feature-item">
+                    <strong>NLP Summarization</strong>
+                    <span>Salience scoring, action items &amp; compression metrics</span>
+                </div>
+            </div>
+
+            <div class="auth-actions">
+                <a href="/oauth2/authorization/google" class="btn btn-google" id="googleLoginBtn">
+                    <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
+                        <path fill="#EA4335" d="M12 10.2v3.9h5.5c-.2 1.3-1.5 3.8-5.5 3.8-3.3 0-6-2.7-6-6s2.7-6 6-6c1.9 0 3.1.8 3.8 1.5l2.6-2.5C16.8 3.4 14.6 2.5 12 2.5 6.8 2.5 2.5 6.8 2.5 12s4.3 9.5 9.5 9.5c5.5 0 9.1-3.9 9.1-9.3 0-.6-.1-1.1-.2-1.6H12z"/>
+                    </svg>
+                    Sign in with Google (OAuth 2.0)
+                </a>
+                <button class="btn btn-primary" id="demoLoginBtn">
+                    Launch Portfolio Demo Workspace
+                </button>
+            </div>
+            <p class="auth-hint" id="authErrorHint"></p>
+            <div class="auth-footer">
+                <a href="/swagger-ui.html" target="_blank">OpenAPI / Swagger Docs</a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main App Workspace -->
+    <div id="appView" class="app-shell hidden">
+        <header class="topbar">
+            <div class="topbar-left">
+                <div class="logo">
+                    <span class="logo-icon">✉</span>
+                    <div>
+                        <div class="logo-title">SmartMail</div>
+                        <div class="logo-sub">OAuth 2.0 • Gmail API • NLP</div>
+                    </div>
+                </div>
+            </div>
+
+            <form class="search-bar" id="searchForm">
+                <input type="search" id="searchInput" placeholder="Search subject, body, or sender..." autocomplete="off">
+                <button type="submit" class="btn btn-ghost btn-sm">Search</button>
+                <button type="button" id="clearSearchBtn" class="btn btn-ghost btn-sm hidden">Clear</button>
+            </form>
+
+            <div class="topbar-actions">
+                <button class="btn btn-secondary btn-sm" id="syncGmailBtn" title="Incremental Gmail API Sync">
+                    ⟳ Sync Gmail
+                </button>
+                <button class="btn btn-primary btn-sm" id="smartAllBtn" title="Run Categorize + Label + NLP Summarize on all emails">
+                    ✦ Smart Pipeline All
+                </button>
+                <button class="btn btn-ghost btn-sm" id="metricsBtn" title="API & Cache Optimization Metrics">
+                    ⚡ Metrics
+                </button>
+                <div class="user-chip" id="userChip">
+                    <img id="userAvatar" class="avatar hidden" alt="avatar">
+                    <div class="user-meta">
+                        <span id="userName">User</span>
+                        <span id="authBadge" class="badge badge-info">OAuth 2.0</span>
+                    </div>
+                </div>
+                <button class="btn btn-ghost btn-sm" id="logoutBtn">Logout</button>
+            </div>
+        </header>
+
+        <div class="workspace">
+            <!-- Left Navigation Sidebar -->
+            <aside class="sidebar">
+                <button class="btn btn-primary compose-btn" id="composeBtn">
+                    + Compose Email
+                </button>
+
+                <div class="nav-section">
+                    <div class="nav-title">Folders</div>
+                    <button class="nav-item active" data-mode="folder" data-value="INBOX">
+                        <span>Inbox</span>
+                        <span class="count-pill" id="count-INBOX">0</span>
+                    </button>
+                    <button class="nav-item" data-mode="starred" data-value="STARRED">
+                        <span>Starred</span>
+                        <span class="count-pill" id="count-STARRED">0</span>
+                    </button>
+                    <button class="nav-item" data-mode="folder" data-value="SENT">
+                        <span>Sent</span>
+                        <span class="count-pill" id="count-SENT">0</span>
+                    </button>
+                    <button class="nav-item" data-mode="folder" data-value="DRAFT">
+                        <span>Drafts</span>
+                        <span class="count-pill" id="count-DRAFT">0</span>
+                    </button>
+                    <button class="nav-item" data-mode="folder" data-value="TRASH">
+                        <span>Trash</span>
+                        <span class="count-pill" id="count-TRASH">0</span>
+                    </button>
+                </div>
+
+                <div class="nav-section">
+                    <div class="nav-title">Smart Categories</div>
+                    <div id="categoryNavList"></div>
+                </div>
+
+                <div class="nav-section">
+                    <div class="nav-header-row">
+                        <span class="nav-title">Keyword Labels</span>
+                        <button class="link-btn" id="manageRulesBtn">+ Rules</button>
+                    </div>
+                    <div id="labelNavList"></div>
+                </div>
+            </aside>
+
+            <!-- Email List Column -->
+            <section class="email-list-pane">
+                <div class="list-header">
+                    <div>
+                        <h2 id="listTitle">Inbox</h2>
+                        <span id="listSubtitle" class="muted">Loading...</span>
+                    </div>
+                    <div class="list-actions">
+                        <button class="btn btn-ghost btn-xs" id="categorizeAllBtn">Categorize All</button>
+                        <button class="btn btn-ghost btn-xs" id="labelAllBtn">Label All</button>
+                        <button class="btn btn-ghost btn-xs" id="summarizeAllBtn">Summarize All</button>
+                    </div>
+                </div>
+
+                <div id="emailListContainer" class="email-list"></div>
+
+                <div class="pagination-bar">
+                    <button class="btn btn-ghost btn-sm" id="prevPageBtn" disabled>← Previous</button>
+                    <span id="pageIndicator" class="muted">Page 1</span>
+                    <button class="btn btn-ghost btn-sm" id="nextPageBtn" disabled>Next →</button>
+                </div>
+            </section>
+
+            <!-- Email Detail & Intelligence Column -->
+            <main class="email-detail-pane" id="emailDetailPane">
+                <div class="empty-state" id="detailEmpty">
+                    <div class="empty-icon">📬</div>
+                    <h3>Select an email to inspect</h3>
+                    <p class="muted">View NLP extractive summaries, action items, auto-assigned categories, keyword labels, and Gmail sync actions.</p>
+                </div>
+
+                <div id="detailContent" class="detail-content hidden">
+                    <div class="detail-toolbar">
+                        <div class="detail-badges">
+                            <span id="detailFolderBadge" class="badge badge-neutral">INBOX</span>
+                            <span id="detailCategoryBadge" class="badge badge-cat">PRIMARY</span>
+                            <span id="detailGmailBadge" class="badge badge-info hidden">Synced from Gmail</span>
+                        </div>
+                        <div class="detail-buttons">
+                            <button class="btn btn-ghost btn-sm" id="detailStarBtn">☆ Star</button>
+                            <button class="btn btn-ghost btn-sm" id="detailReadBtn">Mark Read</button>
+                            <button class="btn btn-danger btn-sm" id="detailTrashBtn">Trash</button>
+                        </div>
+                    </div>
+
+                    <h1 id="detailSubject" class="detail-subject"></h1>
+                    <div class="detail-meta">
+                        <div>
+                            <strong id="detailSender"></strong>
+                            <span class="muted" id="detailSenderEmail"></span>
+                        </div>
+                        <div class="muted" id="detailDate"></div>
+                    </div>
+                    <div class="muted detail-to" id="detailRecipient"></div>
+
+                    <!-- NLP Summary Card -->
+                    <div class="smart-card">
+                        <div class="smart-card-header">
+                            <div>
+                                <span class="smart-title">✦ NLP Extractive Summary</span>
+                                <span id="compressionBadge" class="badge badge-success">0% compressed</span>
+                            </div>
+                            <button class="btn btn-secondary btn-xs" id="resummarizeBtn">Refresh Summary</button>
+                        </div>
+                        <p id="detailSummaryText" class="summary-text"></p>
+                        <div class="compression-track">
+                            <div class="compression-fill" id="compressionFill" style="width: 0%"></div>
+                        </div>
+                        <div class="word-stats muted" id="wordStats"></div>
+                        <div id="takeawaysBlock" class="takeaways-block hidden">
+                            <div class="takeaways-title">Key Action Items</div>
+                            <ul id="takeawaysList"></ul>
+                        </div>
+                    </div>
+
+                    <!-- Smart Labels & Actions Card -->
+                    <div class="labels-card">
+                        <div class="smart-card-header">
+                            <span class="smart-title">🏷 Smart Labels &amp; Automation</span>
+                            <div class="inline-actions">
+                                <button class="btn btn-ghost btn-xs" id="detailCategorizeBtn">Re-categorize</button>
+                                <button class="btn btn-ghost btn-xs" id="detailAutoLabelBtn">Auto-label</button>
+                                <button class="btn btn-primary btn-xs" id="detailSmartBtn">Run Smart Pipeline</button>
+                                <button class="btn btn-secondary btn-xs hidden" id="pushGmailLabelsBtn">Push to Gmail</button>
+                            </div>
+                        </div>
+                        <div id="detailLabelsList" class="labels-chips"></div>
+                        <form id="addLabelForm" class="add-label-form">
+                            <input type="text" id="newLabelInput" placeholder="Add custom label (e.g. FOLLOW_UP)" maxlength="32">
+                            <button type="submit" class="btn btn-secondary btn-sm">Add Label</button>
+                        </form>
+                    </div>
+
+                    <div class="email-body-card">
+                        <pre id="detailBody" class="email-body"></pre>
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <!-- Compose Modal -->
+    <div id="composeModal" class="modal hidden">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3>Compose Email</h3>
+                <button class="btn btn-ghost btn-sm" data-close="composeModal">✕</button>
+            </div>
+            <form id="composeForm">
+                <label class="field">
+                    <span>Recipient Email</span>
+                    <input type="email" id="composeTo" required placeholder="colleague@company.com">
+                </label>
+                <label class="field">
+                    <span>Subject</span>
+                    <input type="text" id="composeSubject" required placeholder="Təcili: Sprint layihə görüşü və faktura">
+                </label>
+                <label class="field">
+                    <span>Body</span>
+                    <textarea id="composeBody" rows="7" required placeholder="Write your message here (English or Azerbaijani)..."></textarea>
+                </label>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-ghost" id="saveDraftBtn">Save Draft</button>
+                    <button type="submit" class="btn btn-primary">Send with Smart Automation</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Label Rules Modal -->
+    <div id="rulesModal" class="modal hidden">
+        <div class="modal-card modal-wide">
+            <div class="modal-header">
+                <h3>Keyword Labeling Rules</h3>
+                <button class="btn btn-ghost btn-sm" data-close="rulesModal">✕</button>
+            </div>
+            <form id="addRuleForm" class="rule-form">
+                <input type="text" id="ruleLabelInput" placeholder="Label name (e.g. VIP_CLIENT)" required>
+                <input type="text" id="ruleKeywordsInput" placeholder="Comma-separated keywords (e.g. vip, platinum, müqavilə)" required>
+                <button type="submit" class="btn btn-primary btn-sm">Save Rule</button>
+            </form>
+            <div id="rulesList" class="rules-list"></div>
+        </div>
+    </div>
+
+    <!-- Performance Metrics Modal -->
+    <div id="metricsModal" class="modal hidden">
+        <div class="modal-card modal-wide">
+            <div class="modal-header">
+                <h3>API &amp; Performance Optimization Telemetry</h3>
+                <button class="btn btn-ghost btn-sm" data-close="metricsModal">✕</button>
+            </div>
+            <div id="metricsGrid" class="metrics-grid"></div>
+        </div>
+    </div>
+
+    <div id="toastContainer" class="toast-container"></div>
+
+    <script src="/js/app.js"></script>
+</body>
+</html>

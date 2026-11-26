@@ -2,6 +2,7 @@ package org.example.gmailapplication.controller;
 
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.example.gmailapplication.dto.*;
 import org.example.gmailapplication.enums.EmailCategory;
@@ -13,6 +14,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/emails")
@@ -52,10 +54,31 @@ public class EmailController {
         return emailService.getEmailsByFolder(userId, folder, pageable);
     }
 
+    @Operation(summary = "Search emails by subject, body, or sender")
+    @GetMapping("/search/{userId}")
+    public Page<EmailsListResponseDto> searchEmails(
+            @PathVariable Long userId,
+            @RequestParam String q,
+            @ParameterObject Pageable pageable) {
+        return emailService.searchEmails(userId, q, pageable);
+    }
+
     @Operation(summary = "Toggle star status on an email")
     @PatchMapping("/{emailId}/toggle-star")
     public boolean toggleStar(@PathVariable Long emailId) {
         return emailService.toggleStar(emailId);
+    }
+
+    @Operation(summary = "Toggle read/unread status on an email")
+    @PatchMapping("/{emailId}/toggle-read")
+    public boolean toggleRead(@PathVariable Long emailId) {
+        return emailService.toggleRead(emailId);
+    }
+
+    @Operation(summary = "Move an email to Trash")
+    @PatchMapping("/{emailId}/trash")
+    public EmailResponseDto moveToTrash(@PathVariable Long emailId) {
+        return emailService.moveToTrash(emailId);
     }
 
     @Operation(summary = "Get sidebar folder counts for a user")
@@ -142,6 +165,24 @@ public class EmailController {
             @PathVariable Long emailId,
             @RequestParam String label) {
         return emailService.removeLabel(emailId, label);
+    }
+
+    @Operation(summary = "List all active keyword-to-label rules")
+    @GetMapping("/rules")
+    public Map<String, List<String>> getLabelRules() {
+        return emailService.getLabelRules();
+    }
+
+    @Operation(summary = "Create or update a persistent keyword labeling rule")
+    @PostMapping("/rules")
+    public Map<String, List<String>> addLabelRule(@Valid @RequestBody LabelRuleRequest request) {
+        return emailService.addLabelRule(request);
+    }
+
+    @Operation(summary = "Delete a custom keyword labeling rule")
+    @DeleteMapping("/rules/{label}")
+    public void deleteLabelRule(@PathVariable String label) {
+        emailService.deleteLabelRule(label);
     }
 
     // ==========================================

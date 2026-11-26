@@ -2,6 +2,7 @@ package org.example.gmailapplication.services;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.example.gmailapplication.config.CacheConfig;
 import org.example.gmailapplication.dto.*;
 import org.example.gmailapplication.entity.Email;
 import org.example.gmailapplication.entity.User;
@@ -11,8 +12,14 @@ import org.example.gmailapplication.exceptions.NotFoundException;
 import org.example.gmailapplication.mapper.EmailMapper;
 import org.example.gmailapplication.repository.EmailRepository;
 import org.example.gmailapplication.repository.UserRepository;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
+import org.springframework.cache.annotation.Caching;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -32,13 +39,22 @@ public class EmailService {
     private final EmailLabelingService labelingService;
     private final EmailSummarizationService summarizationService;
 
+    @Autowired(required = false)
+    private PerformanceMetricsService metricsService;
+
     @Transactional
+    @Caching(evict = {
+            @CacheEvict(cacheNames = CacheConfig.CACHE_SIDEBAR_SUMMARY, allEntries = true),
+            @CacheEvict(cacheNames = CacheConfig.CACHE_CATEGORIZED_EMAILS, allEntries = true),
+            @CacheEvict(cacheNames = CacheConfig.CACHE_USER_LABELS, allEntries = true)
+    })
     public String sendEmail(EmailSendRequest request) {
+        long startNs = System.nanoTime();
         User sender = (request.getSenderId() != null)
                 ? userRepository.findById(request.getSenderId())
-                .orElseThrow(() -> new RuntimeException("The sending user was not found: ID=" + request.getSenderId()))
+                .orElseThrow(() -> new NotFoundException("The sending user was not found: ID=" + request.getSenderId()))
                 : userRepository.findByEmail(request.getSenderEmail())
-                .orElseThrow(() -> new RuntimeException("The sending user was not found: " + request.getSenderEmail()));
+                .orElseThrow(() -> new NotFoundException("The sending user was not found: " + request.getSenderEmail()));
 
         Optional<User> recipientOpt = userRepository.findByEmail(request.getRecipientEmail());
 
@@ -48,11 +64,9 @@ public class EmailService {
 
         String recipientName = recipientOpt.map(User::getFullName).orElse(null);
 
-        // Smart automation: Auto-categorize, Auto-label with keywords, and NLP-summarize
         EmailCategory category = categorizationService.determineCategory(subject, request.getBody(), sender.getEmail());
         Set<String> labels = labelingService.extractLabels(subject, request.getBody());
         EmailSummaryDto summaryDto = summarizationService.generateSummary(null, subject, request.getBody());
-        String summary = summaryDto.getSummary();
 
         Email sentEmail = Email.builder()
                 .user(sender)
@@ -65,7 +79,11 @@ public class EmailService {
                 .folder(EmailFolder.SENT)
                 .category(category)
                 .labels(new HashSet<>(labels))
-                .summary(summary)
+                .summary(summaryDto.getSummary())
+                .keyTakeaways(joinTakeaways(summaryDto.getKeyTakeaways()))
+                .originalWordCount(summaryDto.getOriginalWordCount())
+                .summaryWordCount(summaryDto.getSummaryWordCount())
+                .compressionPercentage(summaryDto.getCompressionPercentage())
                 .isRead(true)
                 .isStarred(false)
                 .createdAt(LocalDateTime.now())
@@ -86,7 +104,11 @@ public class EmailService {
                     .folder(EmailFolder.INBOX)
                     .category(category)
                     .labels(new HashSet<>(labels))
-                    .summary(summary)
+                    .summary(summaryDto.getSummary())
+                    .keyTakeaways(joinTakeaways(summaryDto.getKeyTakeaways()))
+                    .originalWordCount(summaryDto.getOriginalWordCount())
+                    .summaryWordCount(summaryDto.getSummaryWordCount())
+                    .compressionPercentage(summaryDto.getCompressionPercentage())
                     .isRead(false)
                     .isStarred(false)
                     .createdAt(LocalDateTime.now())
@@ -95,16 +117,22 @@ public class EmailService {
             emailRepository.save(inboxEmail);
         }
 
+        recordSmartMetric(1, startNs);
         return "Email sent. Sender Email: " + sender.getEmail();
     }
 
     @Transactional
+    @Caching(evict = {
+            @CacheEvict(cacheNames = CacheConfig.CACHE_SIDEBAR_SUMMARY, allEntries = true),
+            @CacheEvict(cacheNames = CacheConfig.CACHE_CATEGORIZED_EMAILS, allEntries = true),
+            @CacheEvict(cacheNames = CacheConfig.CACHE_USER_LABELS, allEntries = true)
+    })
     public String saveDraft(EmailDraftRequest request) {
         User user = (request.getUserId() != null)
                 ? userRepository.findById(request.getUserId())
-                .orElseThrow(() -> new RuntimeException("User not found: ID=" + request.getUserId()))
+                .orElseThrow(() -> new NotFoundException("User not found: ID=" + request.getUserId()))
                 : userRepository.findByEmail(request.getUserEmail())
-                .orElseThrow(() -> new RuntimeException("User not found: " + request.getUserEmail()));
+                .orElseThrow(() -> new NotFoundException("User not found: " + request.getUserEmail()));
 
         String subject = request.getSubject() != null ? request.getSubject() : "(No Subject)";
         EmailCategory category = categorizationService.determineCategory(subject, request.getBody(), user.getEmail());
@@ -130,23 +158,37 @@ public class EmailService {
         return "Email of the person making the draft: " + request.getUserEmail();
     }
 
+    @Transactional
+    @CacheEvict(cacheNames = CacheConfig.CACHE_SIDEBAR_SUMMARY, allEntries = true)
     public EmailResponseDto getEmailMessage(Long emailId) {
         Email email = emailRepository.findById(emailId)
                 .orElseThrow(() -> new NotFoundException("Email not found: ID=" + emailId));
+
+        if (!Boolean.TRUE.equals(email.getIsRead())) {
+            email.setIsRead(true);
+            emailRepository.save(email);
+        }
 
         return emailMapper.mapToDto(email);
     }
 
     public Page<EmailsListResponseDto> getStarredEmails(Long userId, Pageable pageable) {
         validateUserExists(userId);
-        Page<Email> starredEmails = emailRepository.findByUserIdAndIsStarredTrue(userId, pageable);
-        return starredEmails.map(emailMapper::mapToEmailsListDto);
+        return emailRepository.findByUserIdAndIsStarredTrue(userId, pageable)
+                .map(emailMapper::mapToEmailsListDto);
     }
 
     public Page<EmailsListResponseDto> getEmailsByFolder(Long userId, EmailFolder folder, Pageable pageable) {
         validateUserExists(userId);
-        Page<Email> folderEmails = emailRepository.findByUserIdAndFolder(userId, folder, pageable);
-        return folderEmails.map(emailMapper::mapToEmailsListDto);
+        return emailRepository.findByUserIdAndFolder(userId, folder, pageable)
+                .map(emailMapper::mapToEmailsListDto);
+    }
+
+    public Page<EmailsListResponseDto> searchEmails(Long userId, String query, Pageable pageable) {
+        validateUserExists(userId);
+        String cleanQuery = query != null ? query.trim() : "";
+        return emailRepository.searchByUserId(userId, cleanQuery, pageable)
+                .map(emailMapper::mapToEmailsListDto);
     }
 
     // ==========================================
@@ -155,23 +197,24 @@ public class EmailService {
 
     public Page<EmailsListResponseDto> getEmailsByCategory(Long userId, EmailCategory category, Pageable pageable) {
         validateUserExists(userId);
-        Page<Email> emails = emailRepository.findByUserIdAndCategory(userId, category, pageable);
-        return emails.map(emailMapper::mapToEmailsListDto);
+        return emailRepository.findByUserIdAndCategory(userId, category, pageable)
+                .map(emailMapper::mapToEmailsListDto);
     }
 
+    @Cacheable(cacheNames = CacheConfig.CACHE_CATEGORIZED_EMAILS, key = "#userId")
     public CategorizedEmailsResponseDto getCategorizedEmails(Long userId) {
         validateUserExists(userId);
 
         Map<EmailCategory, Long> categoryCounts = new EnumMap<>(EmailCategory.class);
         Map<EmailCategory, List<EmailsListResponseDto>> categorizedMap = new EnumMap<>(EmailCategory.class);
+        Pageable topTen = PageRequest.of(0, 10, Sort.by(Sort.Direction.DESC, "createdAt"));
 
         for (EmailCategory category : EmailCategory.values()) {
             long count = emailRepository.countByUserIdAndCategory(userId, category);
             categoryCounts.put(category, count);
 
-            List<Email> sampleEmails = emailRepository.findByUserIdAndCategory(userId, category);
-            List<EmailsListResponseDto> dtos = sampleEmails.stream()
-                    .limit(10)
+            List<EmailsListResponseDto> dtos = emailRepository.findByUserIdAndCategory(userId, category, topTen)
+                    .getContent().stream()
                     .map(emailMapper::mapToEmailsListDto)
                     .collect(Collectors.toList());
             categorizedMap.put(category, dtos);
@@ -185,6 +228,7 @@ public class EmailService {
     }
 
     @Transactional
+    @CacheEvict(cacheNames = CacheConfig.CACHE_CATEGORIZED_EMAILS, allEntries = true)
     public EmailResponseDto categorizeEmail(Long emailId) {
         Email email = emailRepository.findById(emailId)
                 .orElseThrow(() -> new NotFoundException("Email not found: ID=" + emailId));
@@ -201,6 +245,7 @@ public class EmailService {
     }
 
     @Transactional
+    @CacheEvict(cacheNames = CacheConfig.CACHE_CATEGORIZED_EMAILS, key = "#userId")
     public int categorizeAllEmails(Long userId) {
         validateUserExists(userId);
         List<Email> userEmails = emailRepository.findByUserId(userId);
@@ -225,10 +270,11 @@ public class EmailService {
 
     public Page<EmailsListResponseDto> getEmailsByLabel(Long userId, String label, Pageable pageable) {
         validateUserExists(userId);
-        Page<Email> emails = emailRepository.findByUserIdAndLabel(userId, label, pageable);
-        return emails.map(emailMapper::mapToEmailsListDto);
+        return emailRepository.findByUserIdAndLabel(userId, label, pageable)
+                .map(emailMapper::mapToEmailsListDto);
     }
 
+    @Cacheable(cacheNames = CacheConfig.CACHE_USER_LABELS, key = "#userId")
     public List<LabelCountDto> getUserLabels(Long userId) {
         validateUserExists(userId);
         List<Object[]> rawList = emailRepository.countLabelsByUserId(userId);
@@ -242,6 +288,7 @@ public class EmailService {
     }
 
     @Transactional
+    @CacheEvict(cacheNames = CacheConfig.CACHE_USER_LABELS, allEntries = true)
     public EmailResponseDto labelEmail(Long emailId) {
         Email email = emailRepository.findById(emailId)
                 .orElseThrow(() -> new NotFoundException("Email not found: ID=" + emailId));
@@ -257,6 +304,7 @@ public class EmailService {
     }
 
     @Transactional
+    @CacheEvict(cacheNames = CacheConfig.CACHE_USER_LABELS, key = "#userId")
     public int labelAllEmails(Long userId) {
         validateUserExists(userId);
         List<Email> userEmails = emailRepository.findByUserId(userId);
@@ -275,6 +323,7 @@ public class EmailService {
     }
 
     @Transactional
+    @CacheEvict(cacheNames = CacheConfig.CACHE_USER_LABELS, allEntries = true)
     public EmailResponseDto addLabel(Long emailId, String label) {
         Email email = emailRepository.findById(emailId)
                 .orElseThrow(() -> new NotFoundException("Email not found: ID=" + emailId));
@@ -290,6 +339,7 @@ public class EmailService {
     }
 
     @Transactional
+    @CacheEvict(cacheNames = CacheConfig.CACHE_USER_LABELS, allEntries = true)
     public EmailResponseDto removeLabel(Long emailId, String label) {
         Email email = emailRepository.findById(emailId)
                 .orElseThrow(() -> new NotFoundException("Email not found: ID=" + emailId));
@@ -306,6 +356,7 @@ public class EmailService {
     // ==========================================
 
     @Transactional
+    @CacheEvict(cacheNames = CacheConfig.CACHE_EMAIL_SUMMARY, key = "#emailId")
     public EmailSummaryDto summarizeEmail(Long emailId) {
         Email email = emailRepository.findById(emailId)
                 .orElseThrow(() -> new NotFoundException("Email not found: ID=" + emailId));
@@ -316,15 +367,28 @@ public class EmailService {
                 email.getBody()
         );
 
-        email.setSummary(summaryDto.getSummary());
+        applySummaryMetadata(email, summaryDto);
         emailRepository.save(email);
 
         return summaryDto;
     }
 
+    @Cacheable(cacheNames = CacheConfig.CACHE_EMAIL_SUMMARY, key = "#emailId")
     public EmailSummaryDto getEmailSummary(Long emailId) {
         Email email = emailRepository.findById(emailId)
                 .orElseThrow(() -> new NotFoundException("Email not found: ID=" + emailId));
+
+        if (email.getSummary() != null && email.getOriginalWordCount() != null) {
+            return EmailSummaryDto.builder()
+                    .emailId(email.getId())
+                    .subject(email.getSubject())
+                    .summary(email.getSummary())
+                    .keyTakeaways(splitTakeaways(email.getKeyTakeaways()))
+                    .originalWordCount(email.getOriginalWordCount())
+                    .summaryWordCount(email.getSummaryWordCount() != null ? email.getSummaryWordCount() : 0)
+                    .compressionPercentage(email.getCompressionPercentage() != null ? email.getCompressionPercentage() : 0.0)
+                    .build();
+        }
 
         return summarizationService.generateSummary(
                 email.getId(),
@@ -334,6 +398,7 @@ public class EmailService {
     }
 
     @Transactional
+    @CacheEvict(cacheNames = CacheConfig.CACHE_EMAIL_SUMMARY, allEntries = true)
     public int summarizeAllEmails(Long userId) {
         validateUserExists(userId);
         List<Email> userEmails = emailRepository.findByUserId(userId);
@@ -345,7 +410,7 @@ public class EmailService {
                     email.getSubject(),
                     email.getBody()
             );
-            email.setSummary(summaryDto.getSummary());
+            applySummaryMetadata(email, summaryDto);
             updated++;
         }
         emailRepository.saveAll(userEmails);
@@ -357,75 +422,50 @@ public class EmailService {
     // ==========================================
 
     @Transactional
+    @Caching(evict = {
+            @CacheEvict(cacheNames = CacheConfig.CACHE_CATEGORIZED_EMAILS, allEntries = true),
+            @CacheEvict(cacheNames = CacheConfig.CACHE_USER_LABELS, allEntries = true),
+            @CacheEvict(cacheNames = CacheConfig.CACHE_EMAIL_SUMMARY, key = "#emailId")
+    })
     public EmailResponseDto processSmart(Long emailId) {
+        long startNs = System.nanoTime();
         Email email = emailRepository.findById(emailId)
                 .orElseThrow(() -> new NotFoundException("Email not found: ID=" + emailId));
 
-        // 1. Categorize
-        EmailCategory category = categorizationService.determineCategory(
-                email.getSubject(),
-                email.getBody(),
-                email.getSenderEmail()
-        );
-        email.setCategory(category);
-
-        // 2. Keyword-based Label
-        Set<String> labels = labelingService.extractLabels(email.getSubject(), email.getBody());
-        if (email.getLabels() == null) {
-            email.setLabels(new HashSet<>());
-        }
-        email.getLabels().addAll(labels);
-
-        // 3. NLP Summarize
-        EmailSummaryDto summaryDto = summarizationService.generateSummary(
-                email.getId(),
-                email.getSubject(),
-                email.getBody()
-        );
-        email.setSummary(summaryDto.getSummary());
-
+        runSmartPipelineOnEntity(email);
         emailRepository.save(email);
+        recordSmartMetric(1, startNs);
         return emailMapper.mapToDto(email);
     }
 
     @Transactional
+    @Caching(evict = {
+            @CacheEvict(cacheNames = CacheConfig.CACHE_CATEGORIZED_EMAILS, key = "#userId"),
+            @CacheEvict(cacheNames = CacheConfig.CACHE_USER_LABELS, key = "#userId"),
+            @CacheEvict(cacheNames = CacheConfig.CACHE_EMAIL_SUMMARY, allEntries = true)
+    })
     public int processSmartAll(Long userId) {
+        long startNs = System.nanoTime();
         validateUserExists(userId);
         List<Email> userEmails = emailRepository.findByUserId(userId);
         int processedCount = 0;
 
         for (Email email : userEmails) {
-            EmailCategory category = categorizationService.determineCategory(
-                    email.getSubject(),
-                    email.getBody(),
-                    email.getSenderEmail()
-            );
-            email.setCategory(category);
-
-            Set<String> labels = labelingService.extractLabels(email.getSubject(), email.getBody());
-            if (email.getLabels() == null) {
-                email.setLabels(new HashSet<>());
-            }
-            email.getLabels().addAll(labels);
-
-            EmailSummaryDto summaryDto = summarizationService.generateSummary(
-                    email.getId(),
-                    email.getSubject(),
-                    email.getBody()
-            );
-            email.setSummary(summaryDto.getSummary());
+            runSmartPipelineOnEntity(email);
             processedCount++;
         }
 
         emailRepository.saveAll(userEmails);
+        recordSmartMetric(processedCount, startNs);
         return processedCount;
     }
 
     // ==========================================
-    // OTHER UTILITY METHODS
+    // OTHER UTILITY METHODS & LABEL RULES
     // ==========================================
 
     @Transactional
+    @CacheEvict(cacheNames = CacheConfig.CACHE_SIDEBAR_SUMMARY, allEntries = true)
     public boolean toggleStar(Long emailId) {
         Email email = emailRepository.findById(emailId)
                 .orElseThrow(() -> new NotFoundException("Email not found: ID=" + emailId));
@@ -436,6 +476,34 @@ public class EmailService {
         return newStarred;
     }
 
+    @Transactional
+    @CacheEvict(cacheNames = CacheConfig.CACHE_SIDEBAR_SUMMARY, allEntries = true)
+    public boolean toggleRead(Long emailId) {
+        Email email = emailRepository.findById(emailId)
+                .orElseThrow(() -> new NotFoundException("Email not found: ID=" + emailId));
+
+        boolean newRead = !Boolean.TRUE.equals(email.getIsRead());
+        email.setIsRead(newRead);
+        emailRepository.save(email);
+        return newRead;
+    }
+
+    @Transactional
+    @Caching(evict = {
+            @CacheEvict(cacheNames = CacheConfig.CACHE_SIDEBAR_SUMMARY, allEntries = true),
+            @CacheEvict(cacheNames = CacheConfig.CACHE_CATEGORIZED_EMAILS, allEntries = true),
+            @CacheEvict(cacheNames = CacheConfig.CACHE_USER_LABELS, allEntries = true)
+    })
+    public EmailResponseDto moveToTrash(Long emailId) {
+        Email email = emailRepository.findById(emailId)
+                .orElseThrow(() -> new NotFoundException("Email not found: ID=" + emailId));
+
+        email.setFolder(EmailFolder.TRASH);
+        emailRepository.save(email);
+        return emailMapper.mapToDto(email);
+    }
+
+    @Cacheable(cacheNames = CacheConfig.CACHE_SIDEBAR_SUMMARY, key = "#userId")
     public SidebarSummaryDto getSidebarSummary(Long userId) {
         validateUserExists(userId);
 
@@ -446,6 +514,73 @@ public class EmailService {
                 .draftCount(emailRepository.countByUserIdAndFolder(userId, EmailFolder.DRAFT))
                 .trashCount(emailRepository.countByUserIdAndFolder(userId, EmailFolder.TRASH))
                 .build();
+    }
+
+    public Map<String, List<String>> getLabelRules() {
+        return labelingService.getRules();
+    }
+
+    public Map<String, List<String>> addLabelRule(LabelRuleRequest request) {
+        labelingService.addRule(request.getLabel(), request.getKeywords());
+        return labelingService.getRules();
+    }
+
+    public void deleteLabelRule(String label) {
+        labelingService.deleteRule(label);
+    }
+
+    private void runSmartPipelineOnEntity(Email email) {
+        EmailCategory category = categorizationService.determineCategory(
+                email.getSubject(),
+                email.getBody(),
+                email.getSenderEmail()
+        );
+        email.setCategory(category);
+
+        Set<String> labels = labelingService.extractLabels(email.getSubject(), email.getBody());
+        if (email.getLabels() == null) {
+            email.setLabels(new HashSet<>());
+        }
+        email.getLabels().addAll(labels);
+
+        EmailSummaryDto summaryDto = summarizationService.generateSummary(
+                email.getId(),
+                email.getSubject(),
+                email.getBody()
+        );
+        applySummaryMetadata(email, summaryDto);
+    }
+
+    private void applySummaryMetadata(Email email, EmailSummaryDto summaryDto) {
+        email.setSummary(summaryDto.getSummary());
+        email.setKeyTakeaways(joinTakeaways(summaryDto.getKeyTakeaways()));
+        email.setOriginalWordCount(summaryDto.getOriginalWordCount());
+        email.setSummaryWordCount(summaryDto.getSummaryWordCount());
+        email.setCompressionPercentage(summaryDto.getCompressionPercentage());
+    }
+
+    private String joinTakeaways(List<String> takeaways) {
+        if (takeaways == null || takeaways.isEmpty()) {
+            return "";
+        }
+        return String.join("\n", takeaways);
+    }
+
+    private List<String> splitTakeaways(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return Collections.emptyList();
+        }
+        return Arrays.stream(raw.split("\\r?\\n"))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .toList();
+    }
+
+    private void recordSmartMetric(int count, long startNs) {
+        if (metricsService != null) {
+            long durationMs = (System.nanoTime() - startNs) / 1_000_000;
+            metricsService.recordSmartProcessing(count, durationMs);
+        }
     }
 
     private void validateUserExists(Long userId) {

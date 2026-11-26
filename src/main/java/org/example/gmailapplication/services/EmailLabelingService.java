@@ -1,7 +1,12 @@
 package org.example.gmailapplication.services;
 
+import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
+import org.example.gmailapplication.entity.LabelRule;
+import org.example.gmailapplication.repository.LabelRuleRepository;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -11,50 +16,60 @@ import java.util.regex.Pattern;
 @Service
 public class EmailLabelingService {
 
-    // Thread-safe map of Label -> List of trigger keywords
+    private final LabelRuleRepository labelRuleRepository;
     private final Map<String, List<String>> labelRules = new ConcurrentHashMap<>();
+    private final Map<String, Pattern> compiledPatterns = new ConcurrentHashMap<>();
 
     public EmailLabelingService() {
+        this(null);
+    }
+
+    @Autowired
+    public EmailLabelingService(@Autowired(required = false) LabelRuleRepository labelRuleRepository) {
+        this.labelRuleRepository = labelRuleRepository;
         initDefaultRules();
     }
 
+    @PostConstruct
+    public void loadPersistedRules() {
+        if (labelRuleRepository == null) {
+            return;
+        }
+        for (LabelRule persisted : labelRuleRepository.findAll()) {
+            mergeRuleInMemory(persisted.getLabelName(), persisted.getKeywords());
+        }
+    }
+
     private void initDefaultRules() {
-        labelRules.put("URGENT", Arrays.asList(
+        mergeRuleInMemory("URGENT", Arrays.asList(
                 "təcili", "urgent", "asap", "vacib", "immediate", "critical",
                 "priority", "mühüm", "diqqət", "emergency", "dərhal"
         ));
-
-        labelRules.put("INVOICE", Arrays.asList(
+        mergeRuleInMemory("INVOICE", Arrays.asList(
                 "faktura", "invoice", "receipt", "ödəniş", "bill", "payment",
                 "qaime", "hesab-faktura", "çeki", "amount due", "mədaxil", "məxaric"
         ));
-
-        labelRules.put("MEETING", Arrays.asList(
+        mergeRuleInMemory("MEETING", Arrays.asList(
                 "görüş", "iclas", "meeting", "call", "zoom", "google meet",
                 "teams", "appointment", "təqvim", "webinar", "huddle", "standup"
         ));
-
-        labelRules.put("PROJECT", Arrays.asList(
+        mergeRuleInMemory("PROJECT", Arrays.asList(
                 "layihə", "project", "task", "deadline", "tapşırıq", "sprint",
                 "milestone", "jira", "github", "pr", "commit", "deployment", "release"
         ));
-
-        labelRules.put("SECURITY", Arrays.asList(
+        mergeRuleInMemory("SECURITY", Arrays.asList(
                 "təhlükəsizlik", "security", "otp", "2fa", "verification", "parol",
                 "password", "kod", "təsdiq", "login attempt", "unauthorized", "autentifikasiya"
         ));
-
-        labelRules.put("SUPPORT", Arrays.asList(
+        mergeRuleInMemory("SUPPORT", Arrays.asList(
                 "dəstək", "support", "help", "kömək", "issue", "ticket",
                 "problem", "xəta", "bug", "troubleshoot", "şikayət", "müraciət", "yardım"
         ));
-
-        labelRules.put("HR", Arrays.asList(
+        mergeRuleInMemory("HR", Arrays.asList(
                 "müsahibə", "interview", "vakansiya", "vacancy", "cv", "resume",
                 "karyera", "recruitment", "iş təklifi", "offer letter", "kadr"
         ));
-
-        labelRules.put("FINANCE", Arrays.asList(
+        mergeRuleInMemory("FINANCE", Arrays.asList(
                 "maliyyə", "finance", "bank", "kredit", "credit", "transfer",
                 "balans", "balance", "faiz", "vergi", "tax", "köçürmə"
         ));
@@ -65,15 +80,12 @@ public class EmailLabelingService {
      */
     public Set<String> extractLabels(String subject, String body) {
         String combinedText = ((subject != null ? subject : "") + " " + (body != null ? body : "")).toLowerCase();
-
         Set<String> matchedLabels = new TreeSet<>(String.CASE_INSENSITIVE_ORDER);
 
         for (Map.Entry<String, List<String>> entry : labelRules.entrySet()) {
             String label = entry.getKey();
-            List<String> keywords = entry.getValue();
-
-            for (String keyword : keywords) {
-                if (matchesKeyword(combinedText, keyword.toLowerCase())) {
+            for (String keyword : entry.getValue()) {
+                if (matchesKeyword(combinedText, keyword)) {
                     matchedLabels.add(label.toUpperCase());
                     break;
                 }
@@ -84,21 +96,53 @@ public class EmailLabelingService {
         return matchedLabels;
     }
 
-    /**
-     * Checks if keyword appears in text with boundary recognition.
-     */
     private boolean matchesKeyword(String text, String keyword) {
         if (text == null || keyword == null || keyword.trim().isEmpty()) {
             return false;
         }
-        String regex = "(?i)(^|[\\s.,!?;:\"'()[\\]{}<>/\\\\-])" + Pattern.quote(keyword) + "([\\s.,!?;:\"'()[\\]{}<>/\\\\-]|$)|" + Pattern.quote(keyword);
-        return Pattern.compile(regex, Pattern.UNICODE_CHARACTER_CLASS).matcher(text).find();
+        Pattern pattern = compiledPatterns.computeIfAbsent(keyword.toLowerCase(), EmailLabelingService::compileKeywordPattern);
+        return pattern.matcher(text).find();
+    }
+
+    private static Pattern compileKeywordPattern(String keyword) {
+        return Pattern.compile("(?i)(^|[^\\p{L}\\p{Nd}])" + Pattern.quote(keyword) + "([^\\p{L}\\p{Nd}]|$)",
+                Pattern.UNICODE_CHARACTER_CLASS);
     }
 
     /**
-     * Adds or updates a keyword rule for a specific label dynamically.
+     * Adds or updates a keyword rule for a specific label dynamically and persists it if DB is present.
      */
+    @Transactional
     public void addRule(String label, List<String> keywords) {
+        if (label == null || label.trim().isEmpty() || keywords == null) {
+            return;
+        }
+        String upperLabel = label.trim().toUpperCase();
+        mergeRuleInMemory(upperLabel, keywords);
+
+        if (labelRuleRepository != null) {
+            LabelRule entity = labelRuleRepository.findByLabelNameIgnoreCase(upperLabel)
+                    .orElseGet(() -> LabelRule.builder().labelName(upperLabel).build());
+            entity.setKeywords(new ArrayList<>(labelRules.get(upperLabel)));
+            labelRuleRepository.save(entity);
+        }
+
+        log.info("Registered/updated label rule: {} with keywords {}", upperLabel, labelRules.get(upperLabel));
+    }
+
+    @Transactional
+    public void deleteRule(String label) {
+        if (label == null || label.trim().isEmpty()) {
+            return;
+        }
+        String upperLabel = label.trim().toUpperCase();
+        labelRules.remove(upperLabel);
+        if (labelRuleRepository != null) {
+            labelRuleRepository.deleteByLabelNameIgnoreCase(upperLabel);
+        }
+    }
+
+    private void mergeRuleInMemory(String label, List<String> keywords) {
         if (label == null || label.trim().isEmpty() || keywords == null) {
             return;
         }
@@ -107,17 +151,15 @@ public class EmailLabelingService {
         Set<String> combined = new LinkedHashSet<>(existing);
         for (String kw : keywords) {
             if (kw != null && !kw.trim().isEmpty()) {
-                combined.add(kw.trim().toLowerCase());
+                String clean = kw.trim().toLowerCase();
+                combined.add(clean);
+                compiledPatterns.computeIfAbsent(clean, EmailLabelingService::compileKeywordPattern);
             }
         }
         labelRules.put(upperLabel, new ArrayList<>(combined));
-        log.info("Registered/updated label rule: {} with keywords {}", upperLabel, labelRules.get(upperLabel));
     }
 
-    /**
-     * Returns all active label rules.
-     */
     public Map<String, List<String>> getRules() {
-        return Collections.unmodifiableMap(labelRules);
+        return Collections.unmodifiableMap(new TreeMap<>(labelRules));
     }
 }

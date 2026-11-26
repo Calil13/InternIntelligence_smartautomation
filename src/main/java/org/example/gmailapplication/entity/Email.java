@@ -4,13 +4,22 @@ import jakarta.persistence.*;
 import lombok.*;
 import org.example.gmailapplication.enums.EmailCategory;
 import org.example.gmailapplication.enums.EmailFolder;
+import org.hibernate.annotations.BatchSize;
 
 import java.time.LocalDateTime;
 import java.util.HashSet;
 import java.util.Set;
 
 @Entity
-@Table(name = "emails")
+@Table(
+        name = "emails",
+        indexes = {
+                @Index(name = "idx_emails_user_folder_created", columnList = "user_id, folder, createdAt"),
+                @Index(name = "idx_emails_user_category", columnList = "user_id, category"),
+                @Index(name = "idx_emails_user_starred", columnList = "user_id, isStarred"),
+                @Index(name = "idx_emails_user_gmail_msg", columnList = "user_id, gmailMessageId")
+        }
+)
 @Getter
 @Setter
 @NoArgsConstructor
@@ -25,6 +34,10 @@ public class Email {
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "user_id", nullable = false)
     private User user;
+
+    private String gmailMessageId;
+
+    private String gmailThreadId;
 
     @Column(nullable = false)
     private String senderEmail;
@@ -54,11 +67,21 @@ public class Email {
     @ElementCollection(fetch = FetchType.EAGER)
     @CollectionTable(name = "email_labels", joinColumns = @JoinColumn(name = "email_id"))
     @Column(name = "label")
+    @BatchSize(size = 50)
     @Builder.Default
     private Set<String> labels = new HashSet<>();
 
     @Column(columnDefinition = "TEXT")
     private String summary;
+
+    @Column(columnDefinition = "TEXT")
+    private String keyTakeaways;
+
+    private Integer originalWordCount;
+
+    private Integer summaryWordCount;
+
+    private Double compressionPercentage;
 
     @Column(nullable = false)
     @Builder.Default

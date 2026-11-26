@@ -17,6 +17,8 @@ public interface EmailMapper {
         return EmailResponseDto.builder()
                 .id(email.getId())
                 .userId(email.getUser() != null ? email.getUser().getId() : null)
+                .gmailMessageId(email.getGmailMessageId())
+                .gmailThreadId(email.getGmailThreadId())
                 .senderEmail(email.getSenderEmail())
                 .senderName(email.getSenderName())
                 .recipientEmail(email.getRecipientEmail())

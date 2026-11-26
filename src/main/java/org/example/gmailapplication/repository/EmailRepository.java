@@ -10,7 +10,9 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.util.Collection;
 import java.util.List;
+import java.util.Optional;
 
 @Repository
 public interface EmailRepository extends JpaRepository<Email, Long> {
@@ -26,6 +28,23 @@ public interface EmailRepository extends JpaRepository<Email, Long> {
     Page<Email> findByUserIdAndCategory(Long userId, EmailCategory category, Pageable pageable);
 
     List<Email> findByUserIdAndCategory(Long userId, EmailCategory category);
+
+    Optional<Email> findByUserIdAndGmailMessageId(Long userId, String gmailMessageId);
+
+    @Query("SELECT e.gmailMessageId FROM Email e WHERE e.user.id = :userId AND e.gmailMessageId IN :gmailMessageIds")
+    List<String> findExistingGmailMessageIds(
+            @Param("userId") Long userId,
+            @Param("gmailMessageIds") Collection<String> gmailMessageIds);
+
+    @Query("SELECT e FROM Email e WHERE e.user.id = :userId AND (" +
+            "LOWER(e.subject) LIKE LOWER(CONCAT('%', :query, '%')) OR " +
+            "LOWER(e.body) LIKE LOWER(CONCAT('%', :query, '%')) OR " +
+            "LOWER(e.senderEmail) LIKE LOWER(CONCAT('%', :query, '%')) OR " +
+            "LOWER(COALESCE(e.senderName, '')) LIKE LOWER(CONCAT('%', :query, '%')))")
+    Page<Email> searchByUserId(
+            @Param("userId") Long userId,
+            @Param("query") String query,
+            Pageable pageable);
 
     @Query("SELECT e FROM Email e JOIN e.labels l WHERE e.user.id = :userId AND LOWER(l) = LOWER(:label)")
     Page<Email> findByUserIdAndLabel(@Param("userId") Long userId, @Param("label") String label, Pageable pageable);

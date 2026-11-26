@@ -24,10 +24,23 @@ public class User {
     @Column(nullable = false)
     private String fullName;
 
-    @Column(nullable = false)
+    @Column(nullable = true)
     private String password;
 
     private String avatarUrl;
+
+    @Column(unique = true)
+    private String googleSub;
+
+    private String oauthProvider;
+
+    @Column(nullable = false)
+    @Builder.Default
+    private Boolean oauthConnected = false;
+
+    private String gmailHistoryId;
+
+    private LocalDateTime lastSyncedAt;
 
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
@@ -36,6 +49,9 @@ public class User {
     protected void onCreate() {
         if (createdAt == null) {
             createdAt = LocalDateTime.now();
+        }
+        if (oauthConnected == null) {
+            oauthConnected = false;
         }
     }
 }

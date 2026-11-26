@@ -5,6 +5,7 @@ import org.example.gmailapplication.enums.EmailCategory;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Pattern;
 
 @Slf4j
@@ -12,16 +13,15 @@ import java.util.regex.Pattern;
 public class EmailCategorizationService {
 
     private static final Map<EmailCategory, List<String>> CATEGORY_KEYWORDS = new EnumMap<>(EmailCategory.class);
+    private static final Map<String, Pattern> COMPILED_PATTERNS = new ConcurrentHashMap<>();
 
     static {
-        // SPAM keywords
         CATEGORY_KEYWORDS.put(EmailCategory.SPAM, Arrays.asList(
                 "lottery", "you won", "qazandınız", "million dollars", "claim your prize",
                 "wire transfer", "transfer urgently", "crypto giveaway", "selected winner",
                 "casino", "viagra", "100% free money", "congratulations! you won", "fast cash"
         ));
 
-        // PROMOTIONS keywords
         CATEGORY_KEYWORDS.put(EmailCategory.PROMOTIONS, Arrays.asList(
                 "discount", "sale", "endirim", "kampaniya", "promo", "voucher", "deal",
                 "kupon", "special offer", "təklif", "newsletter", "unsubscribe", "abunə",
@@ -30,7 +30,6 @@ public class EmailCategorizationService {
                 "best price", "promo code", "xüsusi təklif", "qiymət"
         ));
 
-        // SOCIAL keywords
         CATEGORY_KEYWORDS.put(EmailCategory.SOCIAL, Arrays.asList(
                 "linkedin", "facebook", "twitter", "instagram", "tiktok", "youtube",
                 "friend request", "new connection", "tagged you", "commented on",
@@ -38,7 +37,6 @@ public class EmailCategorizationService {
                 "community", "follower", "invited you to", "shared a post", "qrup", "şəbəkəniz"
         ));
 
-        // UPDATES keywords
         CATEGORY_KEYWORDS.put(EmailCategory.UPDATES, Arrays.asList(
                 "security alert", "verification code", "otp", "statement", "confirm your",
                 "təsdiq edin", "şifrə", "kod", "yeniləmə", "hesabat", "bildiriş", "receipt",
@@ -47,7 +45,6 @@ public class EmailCategorizationService {
                 "monthly statement", "ödənişiniz qəbul olundu", "hesabınız aktivləşdirildi"
         ));
 
-        // WORK keywords
         CATEGORY_KEYWORDS.put(EmailCategory.WORK, Arrays.asList(
                 "project", "task", "deadline", "meeting", "görüş", "iclas", "tapşırıq",
                 "layihə", "contract", "müqavilə", "interview", "müsahibə", "hr", "sprint",
@@ -55,6 +52,18 @@ public class EmailCategorizationService {
                 "agenda", "action items", "jira", "pull request", "business proposal",
                 "iş planı", "həftəlik iclas", "müştəri", "hesabat", "işçi"
         ));
+
+        // Pre-compile word-boundary patterns once at startup to avoid repeated regex compilation
+        for (List<String> keywords : CATEGORY_KEYWORDS.values()) {
+            for (String kw : keywords) {
+                COMPILED_PATTERNS.computeIfAbsent(kw, EmailCategorizationService::compileKeywordPattern);
+            }
+        }
+    }
+
+    private static Pattern compileKeywordPattern(String keyword) {
+        return Pattern.compile("(?i)(^|[^\\p{L}\\p{Nd}])" + Pattern.quote(keyword) + "([^\\p{L}\\p{Nd}]|$)",
+                Pattern.UNICODE_CHARACTER_CLASS);
     }
 
     /**
@@ -80,7 +89,6 @@ public class EmailCategorizationService {
         if (cleanSender.contains("security@") || cleanSender.contains("billing@")
                 || cleanSender.contains("no-reply@") || cleanSender.contains("noreply@")
                 || cleanSender.contains("alerts@")) {
-            // Check if it's promotional first
             if (hasPromotionalSignals(cleanSubject, cleanBody)) {
                 return EmailCategory.PROMOTIONS;
             }
@@ -95,15 +103,11 @@ public class EmailCategorizationService {
 
         for (Map.Entry<EmailCategory, List<String>> entry : CATEGORY_KEYWORDS.entrySet()) {
             EmailCategory category = entry.getKey();
-            List<String> keywords = entry.getValue();
-
             int score = 0;
-            for (String kw : keywords) {
-                // Subject matches carry triple weight
+            for (String kw : entry.getValue()) {
                 if (containsWordOrPhrase(cleanSubject, kw)) {
                     score += 3;
                 }
-                // Body matches carry single weight
                 if (containsWordOrPhrase(cleanBody, kw)) {
                     score += 1;
                 }
@@ -133,7 +137,6 @@ public class EmailCategorizationService {
             }
         }
 
-        // If score is too low, treat as general/personal PRIMARY email
         if (maxScore < 1) {
             return EmailCategory.PRIMARY;
         }
@@ -151,9 +154,7 @@ public class EmailCategorizationService {
         if (text.isEmpty() || keyword.isEmpty()) {
             return false;
         }
-        // Match phrase or whole word
-        String regex = "(?i)\\b" + Pattern.quote(keyword) + "\\b";
-        return Pattern.compile(regex, Pattern.UNICODE_CHARACTER_CLASS).matcher(text).find()
-                || text.contains(keyword);
+        Pattern pattern = COMPILED_PATTERNS.computeIfAbsent(keyword, EmailCategorizationService::compileKeywordPattern);
+        return pattern.matcher(text).find();
     }
 }

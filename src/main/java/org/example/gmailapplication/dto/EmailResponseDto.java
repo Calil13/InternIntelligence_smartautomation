@@ -17,6 +17,8 @@ import java.util.Set;
 public class EmailResponseDto {
     private Long id;
     private Long userId;
+    private String gmailMessageId;
+    private String gmailThreadId;
     private String senderEmail;
     private String senderName;
     private String recipientEmail;
